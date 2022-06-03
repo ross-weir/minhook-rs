@@ -4,41 +4,35 @@
 //!
 //! [minhook]: http://www.codeproject.com/KB/winsdk/LibMinHook.aspx
 #![feature(rustc_attrs, unboxed_closures)]
-#![cfg_attr(test, feature(static_recursion))]
 #![warn(missing_docs)]
 #![allow(unknown_lints)]
+#![feature(const_fn_trait_bound)]
 
-#[macro_use]
-extern crate lazy_static;
-extern crate libc;
-extern crate kernel32;
-extern crate winapi;
-
-use std::{mem, ptr, result};
+use lazy_static::lazy_static;
 use std::ffi::OsStr;
 use std::ops::Deref;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::Mutex;
+use std::{mem, ptr, result};
+use windows::core::{PCSTR, PSTR};
+use windows::Win32::Globalization::{WideCharToMultiByte, CP_ACP};
 
-use function::{Function, FnPointer, HookableWith};
+use function::{FnPointer, Function, HookableWith};
 
-pub use error::Error;
-pub use sync::AtomicInitCell;
+pub use crate::error::Error;
+pub use crate::sync::AtomicInitCell;
 
 mod error;
 mod ffi;
-#[macro_use] mod macros;
+#[macro_use]
+mod macros;
 mod sync;
 
 pub mod function;
 pub mod panic;
 
-
-
 /// Result type for most functions and methods in this module.
 pub type Result<T> = result::Result<T, Error>;
-
-
 
 /// A queue of hook changes to be applied at once.
 #[derive(Debug, Default)]
@@ -68,7 +62,7 @@ impl HookQueue {
             static ref LOCK: Mutex<()> = Mutex::new(());
         }
 
-        try!(initialize());
+        initialize()?;
         let _lock = LOCK.lock().unwrap();
 
         unsafe {
@@ -85,13 +79,11 @@ impl HookQueue {
     }
 }
 
-
-
 /// A hook that is destroyed when it goes out of scope.
 #[derive(Debug)]
 pub struct Hook<T: Function> {
     target: FnPointer,
-    trampoline: T
+    trampoline: T,
 }
 
 impl<T: Function> Hook<T> {
@@ -110,16 +102,23 @@ impl<T: Function> Hook<T> {
     /// code location. This last situation can for example happen when the Rust compiler
     /// or LLVM decide to merge multiple functions with the same code into one.
     pub unsafe fn create<D>(target: T, detour: D) -> Result<Hook<T>>
-    where T: HookableWith<D>, D: Function {
-        try!(initialize());
+    where
+        T: HookableWith<D>,
+        D: Function,
+    {
+        initialize()?;
 
         let target = target.to_ptr();
         let detour = detour.to_ptr();
         let mut trampoline = mem::uninitialized();
-        try!(s2r(ffi::MH_CreateHook(target.to_raw(), detour.to_raw(), &mut trampoline)));
+        s2r(ffi::MH_CreateHook(
+            target.to_raw(),
+            detour.to_raw(),
+            &mut trampoline,
+        ))?;
 
         Ok(Hook {
-            target: target,
+            target,
             trampoline: T::from_ptr(FnPointer::from_raw(trampoline)),
         })
     }
@@ -135,9 +134,17 @@ impl<T: Function> Hook<T> {
     /// The target module must remain loaded in memory for the entire duration of the hook.
     ///
     /// See `create()` for more safety requirements.
-    pub unsafe fn create_api<M, D>(target_module: M, target_function: FunctionId, detour: D) -> Result<Hook<T>>
-    where M: AsRef<OsStr>, T: HookableWith<D>, D: Function {
-        fn str_to_wstring(string: &OsStr) -> Option<Vec<winapi::WCHAR>> {
+    pub unsafe fn create_api<M, D>(
+        target_module: M,
+        target_function: FunctionId,
+        detour: D,
+    ) -> Result<Hook<T>>
+    where
+        M: AsRef<OsStr>,
+        T: HookableWith<D>,
+        D: Function,
+    {
+        fn str_to_wstring(string: &OsStr) -> Option<Vec<libc::wchar_t>> {
             let mut wide = string.encode_wide().collect::<Vec<_>>();
             if wide.contains(&0) {
                 return None;
@@ -146,24 +153,39 @@ impl<T: Function> Hook<T> {
             Some(wide)
         }
 
-        try!(initialize());
+        initialize()?;
 
-        let module_name = try!(str_to_wstring(target_module.as_ref()).ok_or(Error::InvalidModuleName));
+        let module_name = str_to_wstring(target_module.as_ref()).ok_or(Error::InvalidModuleName)?;
 
         let (function_name, _data) = match target_function {
-            FunctionId::Ordinal(ord) => (ord as winapi::LPCSTR, Vec::new()),
+            FunctionId::Ordinal(ord) => (ord as *const u8, Vec::new()),
             FunctionId::Name(name) => {
-                let symbol_name_wide = try!(str_to_wstring(name).ok_or(Error::InvalidFunctionName));
+                let symbol_name_wide = str_to_wstring(name).ok_or(Error::InvalidFunctionName)?;
 
-                let size = kernel32::WideCharToMultiByte(winapi::CP_ACP, 0, symbol_name_wide.as_ptr(), -1, ptr::null_mut(), 0, ptr::null(), ptr::null_mut());
+                let size = WideCharToMultiByte(
+                    CP_ACP,
+                    0,
+                    symbol_name_wide.as_slice(),
+                    PSTR::default(),
+                    0,
+                    PCSTR::default(),
+                    ptr::null_mut(),
+                );
                 if size == 0 {
                     return Err(Error::InvalidFunctionName);
                 }
 
-                let mut buffer = Vec::with_capacity(size as usize);
-                buffer.set_len(size as usize);
+                let buffer = vec![0; size as usize];
 
-                let size = kernel32::WideCharToMultiByte(winapi::CP_ACP, 0, symbol_name_wide.as_ptr(), -1, buffer.as_mut_ptr(), size, ptr::null(), ptr::null_mut());
+                let size = WideCharToMultiByte(
+                    CP_ACP,
+                    0,
+                    symbol_name_wide.as_slice(),
+                    PSTR(buffer.as_ptr() as *mut u8),
+                    size,
+                    PCSTR::default(),
+                    ptr::null_mut(),
+                );
                 if size == 0 {
                     return Err(Error::InvalidFunctionName);
                 }
@@ -176,7 +198,13 @@ impl<T: Function> Hook<T> {
         let mut trampoline = mem::uninitialized();
         let mut target = mem::uninitialized();
 
-        try!(s2r(ffi::MH_CreateHookApiEx(module_name.as_ptr(), function_name, detour.to_raw(), &mut trampoline, &mut target)));
+        s2r(ffi::MH_CreateHookApiEx(
+            module_name.as_ptr(),
+            function_name,
+            detour.to_raw(),
+            &mut trampoline,
+            &mut target,
+        ))?;
 
         Ok(Hook {
             target: FnPointer::from_raw(target),
@@ -217,15 +245,13 @@ impl<T: Function> Drop for Hook<T> {
 unsafe impl<T: Function> Sync for Hook<T> {}
 unsafe impl<T: Function> Send for Hook<T> {}
 
-
-
 /// A function identifier used for dynamically looking up a function.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FunctionId<'a> {
     /// The function's ordinal value.
     Ordinal(u16),
     /// The function's name.
-    Name(&'a OsStr)
+    Name(&'a OsStr),
 }
 
 impl<'a> FunctionId<'a> {
@@ -239,7 +265,6 @@ impl<'a> FunctionId<'a> {
         FunctionId::Name(name.as_ref())
     }
 }
-
 
 /// A hook with a static lifetime.
 ///
@@ -256,16 +281,20 @@ impl<'a> FunctionId<'a> {
 pub struct StaticHook<T: Function> {
     hook: &'static AtomicInitCell<__StaticHookInner<T>>,
     target: __StaticHookTarget<T>,
-    detour: T
+    detour: T,
 }
 
 impl<T: Function> StaticHook<T> {
     #[doc(hidden)]
-    pub const fn __new(hook: &'static AtomicInitCell<__StaticHookInner<T>>, target: __StaticHookTarget<T>, detour: T) -> StaticHook<T> {
+    pub const fn __new(
+        hook: &'static AtomicInitCell<__StaticHookInner<T>>,
+        target: __StaticHookTarget<T>,
+        detour: T,
+    ) -> StaticHook<T> {
         StaticHook {
-            hook: hook,
-            target: target,
-            detour: detour
+            hook,
+            target,
+            detour,
         }
     }
 
@@ -274,18 +303,28 @@ impl<T: Function> StaticHook<T> {
         self.inner().trampoline
     }
 
-    unsafe fn initialize_ref(&self, closure: &'static (Fn<T::Args, Output = T::Output> + Sync)) -> Result<()> {
+    unsafe fn initialize_ref(
+        &self,
+        closure: &'static (dyn Fn<T::Args, Output = T::Output> + Sync),
+    ) -> Result<()> {
         let hook = match self.target {
-            __StaticHookTarget::Static(target) => try!(Hook::create(target, self.detour)),
-            __StaticHookTarget::Dynamic(module_name, function_name) =>
-                try!(Hook::create_api(module_name, FunctionId::name(function_name), self.detour))
+            __StaticHookTarget::Static(target) => Hook::create(target, self.detour)?,
+            __StaticHookTarget::Dynamic(module_name, function_name) => {
+                Hook::create_api(module_name, FunctionId::name(function_name), self.detour)?
+            }
         };
 
-        Ok(self.hook.initialize(__StaticHookInner(hook, closure)).expect("static hook already initialized"))
+        Ok(self
+            .hook
+            .initialize(__StaticHookInner(hook, closure))
+            .expect("static hook already initialized"))
     }
 
-    unsafe fn initialize_box(&self, closure: Box<Fn<T::Args, Output = T::Output> + Sync>) -> Result<()> {
-        try!(self.initialize_ref(&*(&*closure as *const _)));
+    unsafe fn initialize_box(
+        &self,
+        closure: Box<dyn Fn<T::Args, Output = T::Output> + Sync>,
+    ) -> Result<()> {
+        self.initialize_ref(&*(&*closure as *const _))?;
         mem::forget(closure);
         Ok(())
     }
@@ -301,12 +340,17 @@ impl<T: Function> StaticHook<T> {
     /// See documentation for [`Hook::create()`](struct.Hook.html#method.create) and
     /// [`Hook::create_api()`](struct.Hook.html#method.create_api)
     pub unsafe fn initialize<F>(&self, closure: F) -> Result<()>
-    where F: Fn<T::Args, Output = T::Output> + Sync + 'static {
+    where
+        F: Fn<T::Args, Output = T::Output> + Sync + 'static,
+    {
         self.initialize_box(Box::new(closure))
     }
 
     fn inner(&self) -> &'static Hook<T> {
-        let &__StaticHookInner(ref hook, _) = self.hook.get().expect("attempt to access uninitialized static hook");
+        let &__StaticHookInner(ref hook, _) = self
+            .hook
+            .get()
+            .expect("attempt to access uninitialized static hook");
         hook
     }
 }
@@ -318,8 +362,6 @@ impl<T: Function> Deref for StaticHook<T> {
         self.inner()
     }
 }
-
-
 
 /// A hook with a static lifetime and a default detour closure.
 ///
@@ -335,15 +377,18 @@ impl<T: Function> Deref for StaticHook<T> {
 /// before initializing or trying to initialize the hook more than once will result in a panic.
 pub struct StaticHookWithDefault<T: Function> {
     inner: StaticHook<T>,
-    default: &'static (Fn<T::Args, Output = T::Output> + Sync),
+    default: &'static (dyn Fn<T::Args, Output = T::Output> + Sync),
 }
 
 impl<T: Function> StaticHookWithDefault<T> {
     #[doc(hidden)]
-    pub const fn __new(hook: StaticHook<T>, default: &'static (Fn<T::Args, Output = T::Output> + Sync)) -> StaticHookWithDefault<T> {
+    pub const fn __new(
+        hook: StaticHook<T>,
+        default: &'static (dyn Fn<T::Args, Output = T::Output> + Sync),
+    ) -> StaticHookWithDefault<T> {
         StaticHookWithDefault {
             inner: hook,
-            default: default
+            default,
         }
     }
 
@@ -370,8 +415,6 @@ impl<T: Function> Deref for StaticHookWithDefault<T> {
     }
 }
 
-
-
 fn initialize() -> Result<()> {
     // Clean-up is *required* in DLLs. If a DLL gets unloaded while static hooks are installed
     // the hook instructions will point to detour functions that are already unloaded.
@@ -380,12 +423,14 @@ fn initialize() -> Result<()> {
     }
 
     unsafe {
-        s2r(ffi::MH_Initialize()).map(|_| {
-            libc::atexit(cleanup);
-        }).or_else(|error| match error {
-            Error::AlreadyInitialized => Ok(()),
-            error => Err(error)
-        })
+        s2r(ffi::MH_Initialize())
+            .map(|_| {
+                libc::atexit(cleanup);
+            })
+            .or_else(|error| match error {
+                Error::AlreadyInitialized => Ok(()),
+                error => Err(error),
+            })
     }
 }
 
@@ -393,36 +438,35 @@ fn s2r(status: ffi::MH_STATUS) -> Result<()> {
     Error::from_status(status).map_or(Ok(()), Err)
 }
 
-
-
 #[doc(hidden)]
-pub struct __StaticHookInner<T: Function>(pub Hook<T>, pub &'static (Fn<T::Args, Output = T::Output> + Sync));
+pub struct __StaticHookInner<T: Function>(
+    pub Hook<T>,
+    pub &'static (dyn Fn<T::Args, Output = T::Output> + Sync),
+);
 
 #[doc(hidden)]
 pub enum __StaticHookTarget<T: Function> {
     Static(T),
-    Dynamic(&'static str, &'static str)
+    Dynamic(&'static str, &'static str),
 }
-
-
-
 
 #[cfg(test)]
 mod tests {
     use std::mem;
-    use std::sync::Mutex;
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
     use std::os::raw::c_int;
-
-    use {winapi, kernel32};
+    use std::sync::Mutex;
+    use windows::Win32::Globalization::{lstrlenA, lstrlenW};
 
     use super::*;
 
     #[test]
     fn local() {
-        fn f(x: i32) -> i32 { x * 2 }
-        fn d(x: i32) -> i32 { x * 3 }
+        fn f(x: i32) -> i32 {
+            x * 2
+        }
+        fn d(x: i32) -> i32 {
+            x * 3
+        }
 
         assert_eq!(f(5), 10);
         let h = unsafe { Hook::<fn(i32) -> i32>::create(f, d).unwrap() };
@@ -439,35 +483,41 @@ mod tests {
 
     #[test]
     fn local_dynamic() {
-        extern "system" fn lstrlen_w_detour(_string: winapi::LPCWSTR) -> c_int {
+        extern "system" fn lstrlen_w_detour(_string: *const u16) -> c_int {
             -42
         }
 
-        let foo = OsStr::new("foo").encode_wide().chain(Some(0)).collect::<Vec<_>>();
+        let foo = "foo".to_string();
         unsafe {
-            assert_eq!(kernel32::lstrlenW(foo.as_ptr()), 3);
-            let h =  Hook::<extern "system" fn(winapi::LPCWSTR) -> c_int>::create_api(
+            assert_eq!(lstrlenW(foo.clone()), 3);
+            let h = Hook::<extern "system" fn(*const u16) -> c_int>::create_api(
                 "kernel32.dll",
                 FunctionId::name("lstrlenW"),
-                lstrlen_w_detour).unwrap();
-            assert_eq!(kernel32::lstrlenW(foo.as_ptr()), 3);
+                lstrlen_w_detour,
+            )
+            .unwrap();
+            assert_eq!(lstrlenW(foo.clone()), 3);
             h.enable().unwrap();
-            assert_eq!(kernel32::lstrlenW(foo.as_ptr()), -42);
+            assert_eq!(lstrlenW(foo.clone()), -42);
             h.disable().unwrap();
-            assert_eq!(kernel32::lstrlenW(foo.as_ptr()), 3);
+            assert_eq!(lstrlenW(foo.clone()), 3);
         }
     }
 
     #[test]
     fn static_with_default() {
-        fn f(x: i32, y: i32) -> i32 { x + y }
+        fn f(x: i32, y: i32) -> i32 {
+            x + y
+        }
 
         static_hooks! {
             impl h for f: fn(i32, i32) -> i32 = |x, y| x * y;
         }
 
         assert_eq!(f(3, 6), 9);
-        unsafe { h.initialize().unwrap(); }
+        unsafe {
+            h.initialize().unwrap();
+        }
         assert_eq!(f(3, 6), 9);
         h.enable().unwrap();
         assert_eq!(f(3, 6), 18);
@@ -477,7 +527,9 @@ mod tests {
 
     #[test]
     fn static_no_default() {
-        fn f(x: i32, y: i32) -> i32 { x + y }
+        fn f(x: i32, y: i32) -> i32 {
+            x + y
+        }
 
         static_hooks! {
             impl h for f: fn(i32, i32) -> i32;
@@ -492,7 +544,9 @@ mod tests {
         };
 
         assert_eq!(f(3, 6), 9);
-        unsafe { h.initialize(d).unwrap(); }
+        unsafe {
+            h.initialize(d).unwrap();
+        }
         assert_eq!(f(3, 6), 9);
         h.enable().unwrap();
         assert_eq!(f(3, 6), 5);
@@ -505,18 +559,18 @@ mod tests {
     #[test]
     fn static_dynamic() {
         static_hooks! {
-            impl h for "lstrlenA" in "kernel32.dll": extern "system" fn(winapi::LPCSTR) -> c_int = |s| -h.call_real(s);
+            impl h for "lstrlenA" in "kernel32.dll": extern "system" fn(*const u8) -> c_int = |s| -h.call_real(s);
         }
 
-        let foobar = b"foobar\0".as_ptr() as winapi::LPCSTR;
+        let foobar = "foobar";
         unsafe {
-            assert_eq!(kernel32::lstrlenA(foobar), 6);
+            assert_eq!(lstrlenA(foobar), 6);
             h.initialize().unwrap();
-            assert_eq!(kernel32::lstrlenA(foobar), 6);
+            assert_eq!(lstrlenA(foobar), 6);
             h.enable().unwrap();
-            assert_eq!(kernel32::lstrlenA(foobar), -6);
+            assert_eq!(lstrlenA(foobar), -6);
             h.disable().unwrap();
-            assert_eq!(kernel32::lstrlenA(foobar), 6);
+            assert_eq!(lstrlenA(foobar), 6);
         }
     }
 
@@ -534,28 +588,46 @@ mod tests {
 
     #[test]
     fn queue() {
-        fn f1(x: &str) -> &str { x }
-        fn d1(_x: &str) -> &str { "bar" }
+        fn f1(x: &str) -> &str {
+            x
+        }
+        fn d1(_x: &str) -> &str {
+            "bar"
+        }
 
-        fn f2(x: i32) -> i32 { x * 2 }
-        fn d2(x: i32) -> i32 { x + 2 }
+        fn f2(x: i32) -> i32 {
+            x * 2
+        }
+        fn d2(x: i32) -> i32 {
+            x + 2
+        }
 
-        fn f3(x: i32) -> Option<u32> { if x < 0 { None } else { Some(x as u32) } }
-        fn d3(x: i32) -> Option<u32> { Some(x.abs() as u32) }
+        fn f3(x: i32) -> Option<u32> {
+            if x < 0 {
+                None
+            } else {
+                Some(x as u32)
+            }
+        }
+        fn d3(x: i32) -> Option<u32> {
+            Some(x.abs() as u32)
+        }
 
-        let (h1, h2, h3) = unsafe { (
-            Hook::<fn(&'static str) -> &'static str>::create(f1, d1).unwrap(),
-            Hook::<fn(i32) -> i32>::create(f2, d2).unwrap(),
-            Hook::<fn(i32) -> Option<u32>>::create(f3, d3).unwrap()
-        ) };
+        let (h1, h2, h3) = unsafe {
+            (
+                Hook::<fn(&'static str) -> &'static str>::create(f1, d1).unwrap(),
+                Hook::<fn(i32) -> i32>::create(f2, d2).unwrap(),
+                Hook::<fn(i32) -> Option<u32>>::create(f3, d3).unwrap(),
+            )
+        };
 
         HookQueue::new()
-                  .enable(&h1)
-                  .disable(&h2)
-                  .enable(&h3)
-                  .disable(&h3)
-                  .apply()
-                  .unwrap();
+            .enable(&h1)
+            .disable(&h2)
+            .enable(&h3)
+            .disable(&h3)
+            .apply()
+            .unwrap();
 
         assert_eq!(f1("foo"), "bar");
         assert_eq!(f2(42), 84);

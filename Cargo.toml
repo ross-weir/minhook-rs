@@ -2,23 +2,26 @@
 name = "minhook"
 description = "A function hooking library for the Rust programming language"
 version = "0.1.0"
-authors = ["Jascha Neutelings"]
+authors = ["Jascha Neutelings", "Ross Weir"]
 repository = "https://github.com/ross-weir/minhook-rs"
 license = "BSD-2-Clause"
 readme = "README.md"
 links = "MinHook"
 build = "build.rs"
+edition = "2021"
 
 [dependencies]
-kernel32-sys = "0.2"
-libc = "0.2"
-winapi = "0.2"
+libc = "0.2.126"
+
+[dependencies.windows]
+version = "0.37.0"
+features = ["alloc", "Win32_Globalization"]
 
 [dependencies.lazy_static]
 version = "1.4.0"
 
 [build-dependencies]
-gcc = "0.3"
+cc = "1.0.73"
 
 [features]
 increased_arity = []

@@ -5,14 +5,12 @@
 //! reason to use this module directly.
 #![allow(dead_code)]
 
+use std::ffi::c_void;
 use std::ptr;
-
-pub use winapi::{LPCSTR, LPCWSTR, LPVOID};
-
-
 
 /// MinHook Error Codes.
 #[must_use]
+#[allow(non_camel_case_types)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MH_STATUS {
@@ -45,16 +43,12 @@ pub enum MH_STATUS {
     /// The specified module is not loaded.
     MH_ERROR_MODULE_NOT_FOUND,
     /// The specified function is not found.
-    MH_ERROR_FUNCTION_NOT_FOUND
+    MH_ERROR_FUNCTION_NOT_FOUND,
 }
-
-
 
 /// Can be passed as a parameter to `MH_EnableHook`, `MH_DisableHook`,
 /// `MH_QueueEnableHook` or `MH_QueueDisableHook`.
-pub const MH_ALL_HOOKS: LPVOID = ptr::null_mut();
-
-
+pub const MH_ALL_HOOKS: *mut c_void = ptr::null_mut();
 
 extern "system" {
     /// Initialize the MinHook library.
@@ -78,7 +72,11 @@ extern "system" {
     /// * `ppOriginal` - A pointer to the trampoline function, which will be
     ///                  used to call the original target function.
     ///                  This parameter can be `null`.
-    pub fn MH_CreateHook(pTarget: LPVOID, pDetour: LPVOID, ppOriginal: *mut LPVOID) -> MH_STATUS;
+    pub fn MH_CreateHook(
+        pTarget: *mut c_void,
+        pDetour: *mut c_void,
+        ppOriginal: *mut *mut c_void,
+    ) -> MH_STATUS;
 
     /// Creates a Hook for the specified API function, in disabled state.
     ///
@@ -92,8 +90,12 @@ extern "system" {
     /// * `ppOriginal` - A pointer to the trampoline function, which will be
     ///                  used to call the original target function.
     ///                  This parameter can be `null`.
-    pub fn MH_CreateHookApi(pszModule: LPCWSTR, pszProcName: LPCSTR, pDetour: LPVOID,
-                            ppOriginal: *mut LPVOID) -> MH_STATUS;
+    pub fn MH_CreateHookApi(
+        pszModule: *const u16,
+        pszProcName: *const u8,
+        pDetour: *mut c_void,
+        ppOriginal: *mut *mut c_void,
+    ) -> MH_STATUS;
 
     /// Creates a Hook for the specified API function, in disabled state.
     ///
@@ -110,14 +112,19 @@ extern "system" {
     /// * `ppTarget`   - A pointer to the target function, which will be used
     ///                  with other functions.
     ///                  This parameter can be `null`.
-    pub fn MH_CreateHookApiEx(pszModule: LPCWSTR, pszProcName: LPCSTR, pDetour: LPVOID,
-                              ppOriginal: *mut LPVOID, ppTarget: *mut LPVOID) -> MH_STATUS;
+    pub fn MH_CreateHookApiEx(
+        pszModule: *const u16,
+        pszProcName: *const u8,
+        pDetour: *mut c_void,
+        ppOriginal: *mut *mut c_void,
+        ppTarget: *mut *mut c_void,
+    ) -> MH_STATUS;
 
     /// Removes an already created hook.
     ///
     /// # Arguments
     /// * `pTarget` - A pointer to the target function.
-    pub fn MH_RemoveHook(pTarget: LPVOID) -> MH_STATUS;
+    pub fn MH_RemoveHook(pTarget: *mut c_void) -> MH_STATUS;
 
     /// Enables an already created hook.
     ///
@@ -125,7 +132,7 @@ extern "system" {
     /// * `pTarget` - A pointer to the target function.
     ///               If this parameter is `MH_ALL_HOOKS`, all created hooks are
     ///               enabled in one go.
-    pub fn MH_EnableHook(pTarget: LPVOID) -> MH_STATUS;
+    pub fn MH_EnableHook(pTarget: *mut c_void) -> MH_STATUS;
 
     /// Disables an already created hook.
     ///
@@ -133,7 +140,7 @@ extern "system" {
     /// * `pTarget` - A pointer to the target function.
     ///               If this parameter is `MH_ALL_HOOKS`, all created hooks are
     ///               disabled in one go.
-    pub fn MH_DisableHook(pTarget: LPVOID) -> MH_STATUS;
+    pub fn MH_DisableHook(pTarget: *mut c_void) -> MH_STATUS;
 
     /// Queues to enable an already created hook.
     ///
@@ -141,7 +148,7 @@ extern "system" {
     /// * `pTarget` - A pointer to the target function.
     ///               If this parameter is `MH_ALL_HOOKS`, all created hooks are
     ///               queued to be enabled.
-    pub fn MH_QueueEnableHook(pTarget: LPVOID) -> MH_STATUS;
+    pub fn MH_QueueEnableHook(pTarget: *mut c_void) -> MH_STATUS;
 
     /// Queues to disable an already created hook.
     ///
@@ -149,7 +156,7 @@ extern "system" {
     /// * `pTarget` - A pointer to the target function.
     ///               If this parameter is `MH_ALL_HOOKS`, all created hooks are
     ///               queued to be disabled.
-    pub fn MH_QueueDisableHook(pTarget: LPVOID) -> MH_STATUS;
+    pub fn MH_QueueDisableHook(pTarget: *mut c_void) -> MH_STATUS;
 
     /// Applies all queued changes in one go.
     pub fn MH_ApplyQueued() -> MH_STATUS;

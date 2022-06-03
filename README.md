@@ -2,10 +2,10 @@
 
 [![Build status](https://ci.appveyor.com/api/projects/status/e7yg48n0835hy9b6?svg=true)](https://ci.appveyor.com/project/Jascha-N/minhook-rs)
 
-[Documentation](http://jascha-n.github.io/minhook-rs)
-
 A function hooking library for the Rust programming language. This library provides efficient and safe bindings to the
 [MinHook](https://github.com/TsudaKageyu/minhook) library.
+
+This is a fork of [`minhook-rs`](https://github.com/Jascha-N/minhook-rs) by `Jascha-N` that has been updated to rust edition `2021` and to use the official windows crate.
 
 It currently supports the x86 and x86_64 architectures and the GCC (MinGW) and MSVC toolchains on Windows. Requires the Rust Nightly compiler.
 The supported target triples are:
@@ -19,7 +19,7 @@ First, add the following lines to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-minhook = { git = "https://github.com/Jascha-N/minhook-rs" }
+minhook = { git = "https://github.com/ross-weir/minhook-rs" }
 ```
 
 Next, add this to your crate root:

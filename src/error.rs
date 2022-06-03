@@ -1,7 +1,7 @@
 use std::error;
 use std::fmt::{self, Display, Formatter};
 
-use ffi::MH_STATUS;
+use crate::ffi::MH_STATUS;
 
 
 

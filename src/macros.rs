@@ -36,7 +36,7 @@
 /// visibility. Any attributes used on a hook definition will be applied to the resulting
 /// hook variable.
 #[macro_export]
-#[cfg_attr(rustfmt, rustfmt_skip)]
+#[rustfmt::skip]
 macro_rules! static_hooks {
     // Step 1: parse attributes
     (@parse_attr ($($args:tt)*)
@@ -302,7 +302,7 @@ macro_rules! impl_hookable {
     (@impl_safe ($($nm:ident : $ty:ident),*) ($fn_type:ty)) => {
         impl<Ret: 'static, $($ty: 'static),*> Hook<$fn_type> {
             #[doc(hidden)]
-            #[allow(too_many_arguments)]
+            #[allow(clippy::too_many_arguments)]
             pub fn call_real(&self, $($nm : $ty),*) -> Ret {
                 (self.trampoline)($($nm),*)
             }
@@ -314,7 +314,7 @@ macro_rules! impl_hookable {
 
         impl<Ret: 'static, $($ty: 'static),*> Hook<$fn_type> {
             #[doc(hidden)]
-            #[allow(too_many_arguments)]
+            #[allow(clippy::too_many_arguments)]
             pub unsafe fn call_real(&self, $($nm : $ty),*) -> Ret {
                 (self.trampoline)($($nm),*)
             }
@@ -337,7 +337,7 @@ macro_rules! impl_hookable {
                 unsafe { FnPointer::from_raw(*self as *mut c_void) }
             }
 
-            #[allow(useless_transmute)]
+            #[allow(clippy::useless_transmute)]
             fn to_unsafe(&self) -> Self::Unsafe {
                 unsafe { mem::transmute(*self) }
             }
