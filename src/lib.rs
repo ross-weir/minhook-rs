@@ -110,7 +110,7 @@ impl<T: Function> Hook<T> {
 
         let target = target.to_ptr();
         let detour = detour.to_ptr();
-        let mut trampoline = mem::uninitialized();
+        let mut trampoline = mem::MaybeUninit::uninit().assume_init();
         s2r(ffi::MH_CreateHook(
             target.to_raw(),
             detour.to_raw(),
@@ -195,8 +195,8 @@ impl<T: Function> Hook<T> {
         };
 
         let detour = detour.to_ptr();
-        let mut trampoline = mem::uninitialized();
-        let mut target = mem::uninitialized();
+        let mut trampoline = mem::MaybeUninit::uninit().assume_init();
+        let mut target = mem::MaybeUninit::uninit().assume_init();
 
         s2r(ffi::MH_CreateHookApiEx(
             module_name.as_ptr(),

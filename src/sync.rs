@@ -19,8 +19,13 @@ impl<T> AtomicInitCell<T> {
         let mut boxed = Box::new(value);
         if !self
             .0
-            .compare_and_swap(ptr::null_mut(), &mut *boxed, Ordering::SeqCst)
-            .is_null()
+            .compare_exchange(
+                ptr::null_mut(),
+                &mut *boxed,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
         {
             return Err(());
         }
