@@ -12,8 +12,8 @@ static_hooks! {
 
 fn main() {
     // Create a detour closure. This closure can capture any Sync variables.
-    let detour = |wnd, text, caption, flags| unsafe {
-        MESSAGE_BOX_A_HOOK.call_real(wnd, caption, PCSTR("hooked text!".as_ptr()), flags)
+    let detour = |wnd, _text, caption, flags| unsafe {
+        MESSAGE_BOX_A_HOOK.call_real(wnd, PCSTR("hooked text!\0".as_ptr()), caption, flags)
     };
 
     // Install the hook.
